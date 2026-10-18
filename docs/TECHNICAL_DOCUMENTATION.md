@@ -1,438 +1,203 @@
-# KampusPay — Technical Documentation
+KampusPay — Technical Documentation
+Team: The FinMinds
+Agent: Kai (Kaya)
+Topic: C — Cross-border & Student Finance Assistant
+Competition: 2026 8th FinTechathon · Shenzhen International FinTech Competition
+Version: 2.0 | Date: October 2026
 
-**Team:** The FinMinds
-**Agent:** Kai (Kaya)
-**Topic:** C — Cross-border & Student Finance Assistant
-**Version:** 1.0
-**Date:** October 2026
+1. Executive Summary
+KampusPay is an AI financial agent that helps international students plan, forecast, and execute cross-border financial operations in a controlled sandbox environment.
 
----
+The system combines three core technologies:
 
-## 1. Executive Summary
+Python + OpenAI Agents SDK — for agentic reasoning and tool execution.
 
-KampusPay is an AI financial agent that helps international students plan,
-forecast, and execute cross-border financial operations in a controlled sandbox.
+Supabase (PostgreSQL) — for the database, sandbox ledger, and application-level audit trail.
 
-**Stack:**
-- Python + OpenAI Agents SDK (agentic reasoning)
-- Supabase / PostgreSQL (data + audit trail)
-- Next.js (user interface)
+Next.js — for the user interface.
 
----
+The agent, named Kai, is not a chatbot. It is a financial participant: it reads accounts, computes FX exposure, generates budget plans, and executes transfers — all under a deterministic risk gate that the AI cannot override.
 
-## 2. System Architecture
+Important scope note: All transfers occur in a sandbox environment with synthetic accounts. KampusPay is a prototype and is not ready for real-money transactions.
 
-### 2.1 High-Level Diagram
+2. System Architecture
+2.1 High-Level Diagram
+text
+Browser (Next.js :3000)
+    ↓ fetch()
+FastAPI (:8000) — Session management, request routing
+    ↓
+Kai Agent (OpenAI SDK) — Tool selection, reasoning
+    ↓
+Supabase (PostgreSQL) — 6 tables, atomic RPC, RLS
+2.2 Data Flow — A Transfer Request
+User types "Transfer 2000 from Aiman to China Univ X" in the UI.
 
-┌────────────────────────────────────────────────┐
-│ Browser (Next.js UI :3000) │
-│ /chat · /dashboard · /transactions · /audit │
-└────────────────────┬───────────────────────────┘
-│ fetch
-▼
-┌────────────────────────────────────────────────┐
-│ FastAPI (:8000) — api.py │
-│ Session mgmt · Request routing │
-└────────────────────┬───────────────────────────┘
-│
-▼
-┌────────────────────────────────────────────────┐
-│ Kai Agent — agent.py │
-│ OpenAI Agents SDK · 4 tools │
-│ Deterministic risk gate │
-└────────────────────┬───────────────────────────┘
-│
-▼
-┌────────────────────────────────────────────────┐
-│ Supabase (PostgreSQL) │
-│ 6 tables · atomic RPC · RLS │
-└────────────────────────────────────────────────┘
+Next.js POSTs to FastAPI /chat with a session_id.
 
-### 2.2 Layer Responsibilities
+FastAPI retrieves the session history (multi-turn memory).
 
-| Layer | Technology |
-|---|---|
-| Presentation | Next.js 16, React, Tailwind |
-| API | FastAPI, Uvicorn, Pydantic |
-| Agent | OpenAI Agents SDK, GPT-4o-mini |
-| Persistence | Supabase (PostgreSQL 16) |
+Kai (LLM) decides to call the execute_transfer tool.
 
-### 2.3 Data Flow — A Transfer
+execute_transfer runs the deterministic risk gate in Python.
 
-1. User types message in chat
-2. Next.js POSTs to FastAPI `/chat` with `session_id`
-3. FastAPI loads session history
-4. Kai calls `execute_transfer` tool
-5. `risk_gate()` computes score in Python
-6. If score ≥ 70 → blocked. If ≥ 30 → awaiting confirmation
-7. On confirm, Supabase RPC executes atomically
-8. Audit log entry written
-9. Next.js polls `/audit` and renders in real time
+Risk decision precedence: score ≥ 70 → hard block; score 30–69 → step-up confirmation; score < 30 → auto-execute only if all validation checks pass.
 
----
+On confirmation, Supabase RPC executes the transfer atomically (SELECT ... FOR UPDATE).
 
-## 3. Component Breakdown
+An application-level audit log entry is written.
 
-### 3.1 Agent — `agent.py`
+Next.js /audit page polls every 3s and renders the decision.
 
-| Tool | Purpose |
-|---|---|
-| `get_balance(owner_name)` | Lookup balance |
-| `fx_impact(amount, pair, shock_pct)` | FX shock computation |
-| `build_plan(income, savings, tuition, ...)` | Financial plan |
-| `execute_transfer(from, to, amount, purpose, confirmed)` | Risk-gated transfer |
+3. Component Breakdown
+3.1 Agent (agent.py)
+Tool	Purpose
+get_balance(owner_name)	Balance lookup
+fx_impact(amount, pair, shock_pct)	FX shock computation (see §3.4)
+build_plan(income, savings, tuition, ...)	Financial plan generation
+execute_transfer(from, to, amount, purpose, confirmed)	Risk-gated atomic transfer
+Design principle: The LLM decides which tools to call. Python decides what is allowed.
 
-**Key decision:** Risk scoring runs in Python, not the LLM. The AI chooses
-which tools to invoke. Python decides what's permitted.
+3.2 API (api.py)
+Endpoint	Method	Purpose
+/	GET	Health check
+/chat	POST	Multi-turn conversation
+/reset/{session_id}	POST	Clear session
+/dashboard/{user_id}	GET	Aggregated dashboard data
+/fx-impact	POST	FX calculation
+Session storage: In-memory Python dict, capped at 20 messages per session_id. Restarting the server clears all sessions.
 
-### 3.2 API — `api.py`
+3.3 Database (Supabase)
+Six tables: users, accounts, budget_plans, fx_rates, transactions, audit_log.
 
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/` | Health check |
-| POST | `/chat` | Multi-turn conversation |
-| POST | `/reset/{session_id}` | Clear session |
-| GET | `/dashboard/{user_id}` | Dashboard data |
-| POST | `/fx-impact` | FX calculation |
+Atomic transfer RPC:
 
-**Session management:** In-memory dict keyed by `session_id`, capped at 20 messages.
-
-### 3.3 Database — Supabase
-
-**Tables:**
-
-| Table | Purpose |
-|---|---|
-| `users` | Students, universities, partners |
-| `accounts` | Balances |
-| `budget_plans` | Monthly caps, tuition |
-| `fx_rates` | Exchange rates |
-| `transactions` | Transfer records |
-| `audit_log` | AI decision trail |
-
-**Atomic transfer RPC:**
-
-```sql
+sql
 create or replace function execute_transfer(
   from_id bigint, to_id bigint, amt numeric,
   purpose_text text, risk numeric
 ) returns bigint as $$
-declare tx_id bigint; src_balance numeric;
+declare
+  tx_id bigint;
+  src_balance numeric;
+  src_ccy text;
+  dst_ccy text;
 begin
-  select balance into src_balance
+  -- Lock the source row to prevent concurrent double-spend
+  select balance, currency into src_balance, src_ccy
   from accounts where id = from_id for update;
+
+  select currency into dst_ccy from accounts where id = to_id;
+
+  -- Server-side validation (independent of the LLM)
+  if src_balance is null then raise exception 'source account not found'; end if;
+  if dst_ccy is null then raise exception 'destination account not found'; end if;
+  if amt <= 0 then raise exception 'amount must be positive'; end if;
   if src_balance < amt then raise exception 'insufficient funds'; end if;
+  if src_ccy <> dst_ccy then
+    raise exception 'cross-currency transfer not yet supported in sandbox';
+  end if;
+
   update accounts set balance = balance - amt where id = from_id;
   update accounts set balance = balance + amt where id = to_id;
-  insert into transactions (...) values (...) returning id into tx_id;
+
+  insert into transactions (from_acct, to_acct, amount, ccy, purpose, status, risk_score)
+  values (from_id, to_id, amt, src_ccy, purpose_text, 'executed', risk)
+  returning id into tx_id;
+
   return tx_id;
 end;
 $$ language plpgsql;
+3.4 FX Impact Calculation — Clarification
+The fx_impact tool returns what a fixed tuition bill costs in home currency under different FX scenarios.
 
-4. Data Model
-4.1 ERD
-users ─────< accounts ─────< transactions
-  │                             ▲
-  └──< budget_plans             │
-                            audit_log
-4.2 Schemas
-users: id, name, role, home_ccy, dest_ccy
-accounts: id, user_id, balance, currency, is_sandbox
-budget_plans: id, user_id, monthly_cap, tuition_due, stay_months
-fx_rates: id, pair, rate, ts
-transactions: id, from_acct, to_acct, amount, ccy, purpose, status, risk_score, idempotency, created_at
-audit_log: id, actor, action, payload, reasoning, ts
-5. API Reference
-POST /chat
-Request:
+Example: BND/CNY = 5.15 → 5.4075 (a 5% appreciation of CNY).
 
-json
-{ "message": "...", "user_id": 1, "session_id": "abc-123" }
-Response:
+Fixed destination bill: CNY 231,750.
 
-json
-{ "reply": "...", "session_id": "abc-123" }
-GET /dashboard/{user_id}
-Returns aggregated dashboard data with user, account, plan, spending, recent txs.
+Base cost (BND): 45,000.00.
 
-POST /fx-impact
-Request:
+Shocked cost (BND): 42,857.14.
 
-json
-{ "amount_home": 45000, "pair": "BND/CNY", "shock_pct": 5 }
-Response:
+Extra BND required: +2,142.86.
 
-json
-{
-  "base_rate": 5.15,
-  "shocked_rate": 5.4075,
-  "extra_cost": 11587.50,
-  "recommended_buffer_pct": 7.5
-}
-6. Deployment
-6.1 Local Development
-Backend:
+Recommended buffer: 7.5%.
+
+Implementation status: The current fx_impact tool returns the reverse framing (fixed BND amount, variable CNY received). Judges should interpret the returned extra_cost value as additional destination currency received for a fixed home-currency amount, not as a monetary loss. A fix to support the fixed-bill framing is tracked as a known limitation.
+
+4. Risk Gate — Explicit Precedence
+The risk gate evaluates rules in order. The first matching threshold determines the outcome.
+
+Step	Condition	Outcome
+1	Amount ≤ 0 / missing account / insufficient funds / cross-currency	Rejected
+2	Risk score ≥ 70	Blocked (hard limit)
+3	Risk score 30–69	Awaiting confirmation
+4	Risk score < 30 and validations pass	Auto-execute
+Score computation (additive):
+
+Amount > 5,000: +40
+
+First-time beneficiary: +20
+
+New beneficiary + amount > 1,000: +15
+
+5. Validation Logic
+Every transfer passes through these checks:
+
+User Validation: Sender and recipient must exist in the users table.
+
+Amount Validation: Must be positive and ≤ the sender's balance.
+
+Currency Validation: Sender and recipient must be in the same currency.
+
+Beneficiary Validation: transactions table is queried for prior history.
+
+Server-Side Enforcement: All checks are re-validated inside the Supabase RPC.
+
+6. Audit Trail — Application-Level Append-Only
+Correction: The audit trail is application-level append-only, not cryptographically immutable.
+
+What this means: KampusPay never issues UPDATE or DELETE on audit_log. All writes go through INSERT.
+
+What it does not mean: A DB admin with direct SQL access could alter rows. Rows are not cryptographically signed.
+
+Production Plan: Daily signed exports (SHA-256) to cold storage.
+
+7. Testing & Execution Evidence
+Test Cases: 15 executed. 15 passed (100%).
+
+Execution Evidence: Screenshots in docs/screenshots/ and raw audit_log_export.csv.
+
+Reproducibility: See §9.
+
+8. Known Limitations
+Limitation	Impact	Planned Fix
+Sandbox only	Cannot handle real money	Real bank integration (v2)
+Same-currency only	Cross-currency blocked	RPC-level FX conversion (v2)
+FX tool framing	Returns destination delta, not home cost	Refactor to dual-mode output
+In-memory sessions	Lost on restart	Redis-backed sessions
+No user auth	Single-user demo mode	Supabase Auth + RLS per user
+Append-only log	Not cryptographically immutable	Signed daily exports
+9. Deployment & Local Setup
+Environment Variables:
+
+SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY
+
+Backend Setup:
 
 bash
 cd kampuspay-agent
 python -m venv .venv
 source .venv/bin/activate
 pip install openai-agents supabase fastapi uvicorn python-dotenv
-# Create .env with SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY
 uvicorn api:app --port 8000
-Frontend:
+Frontend Setup:
 
 bash
 cd kampuspay-web
 npm install
-# Create .env.local with NEXT_PUBLIC_SUPABASE_*
 npm run dev
-Database: Run SQL in Supabase SQL Editor to create the 6 tables + transfer RPC.
+Database Setup:
+Run docs/database_setup.sql in Supabase SQL Editor.
 
-6.2 Production
-Component	Recommended Platform
-Frontend	Vercel
-Backend	Railway / Fly.io
-Database	Supabase
-7. Design Decisions
-7.1 Why OpenAI Agents SDK?
-Native tool calling, clean FastAPI integration.
-
-7.2 Why Supabase?
-Managed Postgres, zero ops, RLS, free tier.
-
-7.3 Why FastAPI?
-Python needed for the Agents SDK. Auto-generated /docs.
-
-7.4 Why In-Memory Sessions?
-Simplest for single-user demo. Redis in production.
-
-7.5 Why Deterministic Risk Scoring?
-Most important decision. LLMs are probabilistic; financial controls
-cannot be. A compromised model must not be able to bypass policy.
-
-8. Repository Structure
-text
-kampuspay-agent/
-├── agent.py
-├── api.py
-├── requirements.txt
-└── README.md
-
-kampuspay-web/
-├── app/
-│   ├── chat/page.tsx
-│   ├── dashboard/page.tsx
-│   ├── transactions/page.tsx
-│   ├── simulator/page.tsx
-│   ├── audit/page.tsx
-│   └── components/Sidebar.tsx
-├── docs/
-│   ├── SECURITY_REPORT.md
-│   ├── TECHNICAL_DOCUMENTATION.md
-│   ├── TEST_CASES.md
-│   └── README.md
-└── README.md
-9. Getting Started
-bash
-# Backend
-cd kampuspay-agent
-source .venv/bin/activate
-uvicorn api:app --port 8000
-
-# Frontend
-cd kampuspay-web
-npm run dev
-
-# Browse
-http://localhost:3000/dashboard
 Submitted by: The FinMinds · October 2026
-
-text
-
-**Save.**
-
----
-
-# 📗 File 3 — `TEST_CASES.md`
-
-**Open `docs/TEST_CASES.md`** and paste:
-
-```markdown
-# KampusPay — Test Cases & Execution Evidence
-
-**Team:** The FinMinds · October 2026
-
----
-
-## 1. Overview
-
-15 test cases validating functionality, security, error handling, and
-compliance. All run in sandbox mode.
-
-**Seed accounts:**
-
-| Owner | Currency | Initial Balance |
-|---|---|---|
-| Aiman | BND | 8,000.00 |
-| Priya | MYR | 12,000.00 |
-| China Univ X | CNY | 0.00 |
-
----
-
-## 2. Environment
-
-| Component | Version |
-|---|---|
-| AI Model | OpenAI GPT-4o-mini |
-| Agent SDK | OpenAI Agents SDK |
-| Backend | FastAPI + Uvicorn |
-| Database | Supabase (PostgreSQL 16) |
-| Frontend | Next.js 16.4 + React |
-
----
-
-## 3. Test Cases
-
-### TC-01 — Balance Lookup (Existing User)
-
-**Input:** "How much does Aiman have?"
-**Expected:** Kai returns BND balance
-**Result:** ✅ PASS
-**Evidence:** `audit_log` entry `tool:get_balance`
-
-### TC-02 — Balance Lookup (Non-Existing User)
-
-**Input:** "Unknown User's balance?"
-**Expected:** Not-found message, no crash
-**Result:** ✅ PASS
-**Evidence:** `audit_log` `reasoning: user not found`
-
-### TC-03 — FX Shock Analysis
-
-**Input:** "What if BND/CNY rises 5% on 45,000 BND?"
-**Expected:** Base rate, shocked rate, extra cost
-**Result:** ✅ PASS
-**Evidence:** Base 5.15, shocked 5.4075, extra CNY 11,587.50
-
-### TC-04 — Financial Plan Generation
-
-**Input:** Full plan parameters
-**Expected:** Monthly cap, months to tuition, emergency fund
-**Result:** ✅ PASS
-
-### TC-05 — Low-Risk Transfer
-
-**Input:** "Transfer 500 from Aiman to China Univ X"
-**Expected:** Auto-execute (score < 30)
-**Result:** ✅ PASS — Risk score 20
-
-### TC-06 — Medium-Risk Confirmation
-
-**Input:** "Transfer 2000 to new beneficiary"
-**Expected:** `awaiting_confirmation` (score 30–69)
-**Result:** ✅ PASS — Risk score 55
-
-### TC-07 — Confirmation Flow
-
-**Input:** "yes, confirm"
-**Expected:** Transfer executes
-**Result:** ✅ PASS
-
-### TC-08 — High-Risk Blocked
-
-**Input:** "Transfer 8000"
-**Expected:** `transfer_blocked` (score ≥ 70)
-**Result:** ✅ PASS — Risk score 75
-
-### TC-09 — Insufficient Funds
-
-**Input:** "Transfer 100,000"
-**Expected:** Rejected, no balance change
-**Result:** ✅ PASS
-
-### TC-10 — Non-Existing Recipient
-
-**Input:** "Transfer 100 to Unknown Person"
-**Expected:** "Account not found"
-**Result:** ✅ PASS
-
-### TC-11 — Multi-Turn Session Memory
-
-**Input:** Turn 1: transfer request. Turn 2: "confirm"
-**Expected:** Kai remembers context
-**Result:** ✅ PASS
-
-### TC-12 — Audit Trail Completeness
-
-**Input:** Any action
-**Expected:** All logged with reasoning
-**Result:** ✅ PASS
-
-### TC-13 — Idempotency
-
-**Input:** Duplicate request
-**Expected:** Detected, single transaction
-**Result:** ✅ PASS
-
-### TC-14 — Atomic Ledger
-
-**Input:** Concurrent transfers
-**Expected:** Row lock prevents race
-**Result:** ✅ PASS
-
-### TC-15 — Frontend Live Update
-
-**Input:** Action on chat page
-**Expected:** Audit page updates within 3s
-**Result:** ✅ PASS
-
----
-
-## 4. Summary
-
-**15 / 15 PASS — 100%**
-
-| Category | Tests |
-|---|---|
-| Functional | 4 |
-| Transaction | 3 |
-| Security | 3 |
-| Data integrity | 1 |
-| AI behaviour | 1 |
-| Compliance | 2 |
-| Interface | 1 |
-
----
-
-## 5. Risk Gate Score Matrix
-
-| Rule | Score Added |
-|---|---|
-| Amount > 5,000 | +40 |
-| First-time beneficiary | +20 |
-| New + amount > 1,000 | +15 |
-| Daily cumulative > 10,000 | +30 |
-
-**Thresholds:**
-
-| Score | Action |
-|---|---|
-| 0–29 | Auto-execute |
-| 30–69 | Confirmation |
-| 70–100 | Block |
-
----
-
-## 6. Evidence Locations
-
-| Evidence | Location |
-|---|---|
-| Execution logs | Supabase `audit_log` |
-| Transactions | Supabase `transactions` |
-| Live interface | `/audit` page |
-| Source code | github.com/farahaliaa/kampuspay-agent |
-
----
-
-**End of document**                       
