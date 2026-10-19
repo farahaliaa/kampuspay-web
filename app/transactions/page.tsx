@@ -8,6 +8,7 @@ export default function TransactionsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     const supabase = createClient();
 
     async function load() {
@@ -16,13 +17,19 @@ export default function TransactionsPage() {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(50);
-      setTxs(data || []);
-      setLoading(false);
+      if (!cancelled) {
+        setTxs(data || []);
+        setLoading(false);
+      }
     }
 
     load();
     const t = setInterval(load, 5000);
-    return () => clearInterval(t);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, []);
 
   return (

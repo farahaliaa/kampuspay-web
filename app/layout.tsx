@@ -1,24 +1,17 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
-import { ThemeProvider } from "next-themes";
-import { Nav } from "./components/Nav";
+import { Sidebar } from "./components/Sidebar";
 import "./globals.css";
-
-const defaultUrl = process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : "http://localhost:3000";
-
-export const metadata: Metadata = {
-  metadataBase: new URL(defaultUrl),
-  title: "KampusPay",
-  description: "AI financial agent for cross-border students",
-};
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  display: "swap",
   subsets: ["latin"],
 });
+
+export const metadata: Metadata = {
+  title: "KampusPay — Study Smart. Pay Smarter.",
+  description: "AI financial agent for cross-border students",
+};
 
 export default function RootLayout({
   children,
@@ -28,15 +21,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.className} antialiased`}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <Nav />
-          {children}
-        </ThemeProvider>
+        <div className="flex min-h-screen bg-slate-950">
+          <Sidebar />
+          <main className="flex-1 overflow-y-auto">{children}</main>
+        </div>
       </body>
     </html>
   );
