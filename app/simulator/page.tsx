@@ -10,26 +10,24 @@ export default function SimulatorPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+
     async function run() {
-      setLoading(true);
-      try {
-        const res = await fetch("http://localhost:8000/fx-impact", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            amount_home: amount,
-            pair,
-            shock_pct: shock,
-          }),
-        });
-        setResult(await res.json());
-      } catch (e) {
-        setResult({ error: "Could not reach Kai's backend" });
-      }
-      setLoading(false);
+      const res = await fetch("http://localhost:8000/fx-impact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount_home: amount, pair, shock_pct: shock }),
+      });
+      const json = await res.json();
+      if (!cancelled) setResult(json);
     }
-    const t = setTimeout(run, 300);
-    return () => clearTimeout(t);
+
+    const t = setTimeout(run, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, [shock, pair, amount]);
 
   return (
